@@ -8,12 +8,17 @@ import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/Co
 import { DataStore } from "@api/index";
 import { definePluginSettings } from "@api/Settings";
 import { Flex } from "@components/Flex";
+import { Grid } from "@components/Grid";
 import { DeleteIcon } from "@components/Icons";
+import { openPluginModal } from "@components/PluginSettings/PluginModal";
+import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModal } from "@utils/modal";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
-import { Button, Forms, Menu, React, TextInput, useEffect, useState } from "@webpack/common";
-
+import { findStoreLazy } from "@webpack";
+import { Button, EmojiStore, Forms, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
+
+const StickerStore = findStoreLazy("StickersStore") as { getStickerById: (id: string) => { name: string; } | undefined; };
 
 interface FolderEntry {
     path: string;
@@ -22,43 +27,72 @@ interface FolderEntry {
 
 let cachedFolderEntries = [{ path: "", name: "" }];
 
-function saveToMenu(srcUrl: string) {
-    return (
-        <Menu.MenuItem
-            id="save-to"
-            key="save-to"
-            label="Save to..."
-        >
-            {cachedFolderEntries.map((entry, index) => (
-                entry.path
-                    ? <Menu.MenuItem
-                        id={`save-to-${index}`}
-                        key={`save-to-${index}`}
-                        label={entry.name}
-                        action={() => Native.saveToFolder(srcUrl, entry.path)}
-                    />
-                    : null
-            ))}
-        </Menu.MenuItem>
-    );
+// Like https://stackoverflow.com/a/59907288
+function basenameish(path: string) {
+    let end = path.length - 1;
+    while (path[end] === "/" || path[end] === "\\") end -= 1;
+
+    const start = Math.max(path.lastIndexOf("/", end), path.lastIndexOf("\\", end));
+    return path.slice(start + 1, end + 1);
 }
 
-// Add the Save to... option to the image context menu
-const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
+function saveHandler(srcUrl: string, path: string, name?: string) {
+    try {
+        Native.saveToFolder(srcUrl, path, name);
+    } catch (e: any) {
+        Toasts.show({
+            message: "Failed to save: " + e.message,
+            type: Toasts.Type.FAILURE,
+            id: Toasts.genId()
+        });
+    }
+}
+
+// Add the Save to... option to whatever context menus could have images
+const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { src: string; }) => {
+    console.log(props);
     if (!props?.src) return;
 
     const group = findGroupChildrenByChildId("save-image", children) ?? children;
-    group.push(saveToMenu(props.src));
+    group.push(saveToMenu(props.src, ""));
 };
 
-const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
-    if (!props.itemSrc) return;
+const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { favoriteableId: string | null; favoriteableType: string | null; itemSrc: string | null; itemSafeSrc: string | null; }) => {
+    // itemSafeSrc is good for normal images/files
+    let source: string | null = props.itemSafeSrc;
+    let type = "";
+    if (props.favoriteableType === "emoji" && props.itemSrc) {
+        source = props.itemSrc.slice(0, props.itemSrc?.indexOf("?size="));
+        type = "Emote";
+    }
+    if (props.favoriteableType === "sticker" && props.itemSrc) {
+        source = props.itemSrc.slice(0, props.itemSrc?.indexOf("?size="));
+        type = "Sticker";
+    }
 
-    const group = findGroupChildrenByChildId("save-image", children) ?? children;
-    group.push(saveToMenu(props.itemSrc));
+    if (!source) return;
+
+    let group = findGroupChildrenByChildId("save-image", children);
+    if (group) {
+        group.push(saveToMenu(source, type, props.favoriteableId));
+        return;
+    }
+    group = findGroupChildrenByChildId("open-native-link", children) || findGroupChildrenByChildId("devmode-copy-id", children, true);
+    if (group) {
+        group.unshift(<Menu.MenuSeparator key="save-to-separator" />);
+        group.unshift(saveToMenu(source, type, props.favoriteableId));
+        return;
+    }
+
+    children.push(saveToMenu(source, type, props.favoriteableId));
 };
 
-// Custom Input component that only triggers onChange on blur
+const userContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
+    console.log(props);
+};
+
+// Buncha components
+
 function Input({ initialValue, onChange, placeholder }: {
     placeholder: string;
     initialValue: string;
@@ -76,6 +110,99 @@ function Input({ initialValue, onChange, placeholder }: {
     );
 }
 
+
+
+function saveToMenu(srcUrl: string, type: string, objectId?: string | null) {
+    // Put the extension on sticker/emote names
+    const extension = basenameish(new URL(srcUrl).pathname).split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
+    let name: string | undefined;
+    if (type === "Sticker" && objectId) {
+        const sticker = StickerStore.getStickerById(objectId);
+        name = sticker?.name;
+    }
+    if (type === "Emote") {
+        const emote = EmojiStore.getCustomEmojiById(objectId);
+        name = emote?.name;
+    }
+    if (name) {
+        name = name.replace(" ", "_");
+    }
+
+    function onSave(path: string) {
+        saveHandler(srcUrl, path, name ? name + "." + extension : undefined);
+    }
+
+    return (
+        <Menu.MenuItem
+            id="save-to"
+            key="save-to"
+            label={type ? `Save ${type} To...` : "Save To..."}
+        >
+            {cachedFolderEntries.length === 1 && <Menu.MenuItem id="saveto-add-folder" key="saveto-add-folder" label="Add A Folder First!" action={() => {
+                openPluginModal(Vencord.Plugins.plugins.SaveTo);
+            }} />}
+            {cachedFolderEntries.map((entry, index) => (
+                entry.path
+                    ? <Menu.MenuItem
+                        id={`save-to-folder-${index}`}
+                        key={`save-to-folder-${index}`}
+                        label={entry.name}
+                        action={() => onSave(entry.path)}
+                    >
+                        <Menu.MenuItem id={`save-${index}`} key={`save-${index}`} label="Save" action={() => onSave(entry.path)} />
+                        <Menu.MenuItem id={`save-as-${index}`} key={`save-as-${index}`} label="Save As..." action={() => {
+                            openModal(props => (
+                                <SaveAsModal modalProps={props} srcUrl={srcUrl} path={entry.path} defaultName={name} />
+                            ));
+                        }} />
+                    </Menu.MenuItem>
+                    : null
+            ))}
+        </Menu.MenuItem>
+    );
+}
+
+// Save as modal component
+
+function SaveAsModal({ modalProps, srcUrl, path, defaultName }: { modalProps: ModalProps, srcUrl: string, path: string; defaultName: string | undefined; }) {
+    const fullname = basenameish(new URL(srcUrl).pathname);
+    const filename = defaultName || fullname.slice(0, fullname.lastIndexOf("."));
+    // Sometimes images (X embeds) have weird things after the extension
+    const extension = fullname.split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
+
+    const [name, setName] = useState("");
+
+    function onSave() {
+        saveHandler(srcUrl, path, name ? name + "." + extension : fullname);
+        modalProps.onClose();
+    }
+
+    return (
+        <ModalRoot {...modalProps}>
+            <ModalHeader>
+                <Forms.FormTitle tag="h4">Save As</Forms.FormTitle>
+            </ModalHeader>
+            <ModalContent style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                <Forms.FormTitle tag="h5">Filename (leave empty for default)</Forms.FormTitle>
+                <Grid columns={2} gap="0.5em" style={{ gridTemplateColumns: "1fr auto", alignItems: "baseline" }}>
+                    <TextInput placeholder={filename} value={name} onChange={setName} onKeyDown={e => {
+                        if (e.key === "Enter") {
+                            onSave();
+                        }
+                    }} />
+                    <Forms.FormTitle tag="h5" style={{ textTransform: "lowercase" }}>{"." + extension}</Forms.FormTitle>
+                </Grid>
+            </ModalContent>
+            <ModalFooter>
+                <Button color={Button.Colors.BRAND} onClick={onSave}>Save</Button>
+                <Button color={Button.Colors.TRANSPARENT} look={Button.Looks.LINK} onClick={() => modalProps.onClose()}>Cancel</Button>
+            </ModalFooter>
+        </ModalRoot>
+    );
+}
+
+// Folder entries component
+
 interface FolderEntriesProps {
     folderEntries: FolderEntry[];
     setFolderEntries(entries: FolderEntry[]): void;
@@ -85,16 +212,6 @@ interface FolderEntriesProps {
 // Most of this component is the same as TextReplace from the Text Replace plugin,
 // eternally grateful I didn't have to write an array settings component from scratch
 function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) {
-
-    // Like https://stackoverflow.com/a/59907288
-    function basenameish(path: string) {
-        let end = path.length - 1;
-        while (path[end] === "/" || path[end] === "\\") end -= 1;
-
-        const start = Math.max(path.lastIndexOf("/", end), path.lastIndexOf("\\", end));
-        return path.slice(start + 1, end + 1);
-    }
-
     // Handle path changes
     async function updatePath(path: string, index: number) {
         const updatedEntries = [...folderEntries];
@@ -166,7 +283,7 @@ function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) 
             <Flex flexDirection="column" style={{ gap: "0.5em" }}>
                 {folderEntries.map((entry, index) => (
                     <React.Fragment key={`${index}-${entry.path}-${entry.name}`}>
-                        <Flex flexDirection="row" style={{ gap: "0.5em" }}>
+                        <Grid columns={3} style={{ gap: "0.5em", gridTemplateColumns: "1fr 1fr auto" }}>
                             <Input
                                 placeholder="Folder path"
                                 initialValue={entry.path}
@@ -194,13 +311,15 @@ function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) 
                             >
                                 <DeleteIcon />
                             </Button>
-                        </Flex>
+                        </Grid>
                     </React.Fragment>
                 ))}
             </Flex>
         </>
     );
 }
+
+// Plugin definition
 
 export const settings = definePluginSettings({
     folderPathsComponent: {
@@ -234,7 +353,8 @@ export default definePlugin({
     description: "Adds quick image saving options.",
     contextMenus: {
         "image-context": imageContextMenuPatch,
-        "message": messageContextMenuPatch
+        "message": messageContextMenuPatch,
+        "user-context": userContextMenuPatch
     },
     settings,
     async start() {
