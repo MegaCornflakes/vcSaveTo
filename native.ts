@@ -22,7 +22,7 @@ function randomChars(length: number) {
     return result;
 }
 
-export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, folderPath: string) {
+export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, folderPath: string, filename?: string) {
     const response = await fetch(srcUrl);
 
     if (!response.ok) {
@@ -34,7 +34,16 @@ export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, f
     const buffer = Buffer.from(arrayBuffer);
 
     // Original file name
-    const filename = basename(new URL(srcUrl).pathname);
+    if (!filename) {
+        filename = basename(new URL(srcUrl).pathname);
+    }
+
+    // Make sure filename won't break anything
+    filename = filename.trim().replace(/[\\/:*?"<>|]/g, "");
+    if (filename === "" || filename === "." || filename === "..") {
+        throw new Error("Invalid filename", { cause: "filename" });
+    }
+
     // Changes if file already exists
     let filenameActual = filename;
 

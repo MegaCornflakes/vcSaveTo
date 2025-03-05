@@ -5,11 +5,13 @@
  */
 
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
+import { DataStore } from "@api/index";
 import { definePluginSettings } from "@api/Settings";
 import { Flex } from "@components/Flex";
 import { DeleteIcon } from "@components/Icons";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
-import { Button, Forms, Menu, React, TextInput, useState } from "@webpack/common";
+import { Button, Forms, Menu, React, TextInput, useEffect, useState } from "@webpack/common";
+
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
 
@@ -18,16 +20,16 @@ interface FolderEntry {
     name: string;
 }
 
-function saveToMenu(srcUrl: string) {
-    const { folderEntries } = settings.use(["folderEntries"]);
+let cachedFolderEntries = [{ path: "", name: "" }];
 
+function saveToMenu(srcUrl: string) {
     return (
         <Menu.MenuItem
             id="save-to"
             key="save-to"
             label="Save to..."
         >
-            {folderEntries.map((entry, index) => (
+            {cachedFolderEntries.map((entry, index) => (
                 entry.path
                     ? <Menu.MenuItem
                         id={`save-to-${index}`}
@@ -76,57 +78,86 @@ function Input({ initialValue, onChange, placeholder }: {
 
 interface FolderEntriesProps {
     folderEntries: FolderEntry[];
+    setFolderEntries(entries: FolderEntry[]): void;
 }
 
 
 // Most of this component is the same as TextReplace from the Text Replace plugin,
 // eternally grateful I didn't have to write an array settings component from scratch
-function FolderEntries({ folderEntries }: FolderEntriesProps) {
+function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) {
+
+    // Like https://stackoverflow.com/a/59907288
+    function basenameish(path: string) {
+        let end = path.length - 1;
+        while (path[end] === "/" || path[end] === "\\") end -= 1;
+
+        const start = Math.max(path.lastIndexOf("/", end), path.lastIndexOf("\\", end));
+        return path.slice(start + 1, end + 1);
+    }
+
     // Handle path changes
     async function updatePath(path: string, index: number) {
+        const updatedEntries = [...folderEntries];
         // If editing the last path and it's not empty, add a new empty entry
         if (index === folderEntries.length - 1 && path !== "") {
-            folderEntries.push({ path: "", name: "" });
+            updatedEntries.push({ path: "", name: "" });
         }
 
         // Update the path at the specified index
-        folderEntries[index].path = path;
+        // If the name is empty, use the basename
+        updatedEntries[index] = {
+            path,
+            name: updatedEntries[index].name === "" ? basenameish(path) : updatedEntries[index].name
+        };
 
         // Remove empty paths (except the last one)
-        if (path === "" && folderEntries[index].name === "" && index !== folderEntries.length - 1) {
-            folderEntries.splice(index, 1);
+        if (path === "" && updatedEntries[index].name === "" && index !== updatedEntries.length - 1) {
+            updatedEntries.splice(index, 1);
         }
+
+        setFolderEntries(updatedEntries);
     }
 
     async function updateName(name: string, index: number) {
+        const updatedEntries = [...folderEntries];
         // If editing the last name and it's not empty, add a new empty entry
-        if (index === folderEntries.length - 1 && name !== "") {
-            folderEntries.push({ path: "", name: "" });
+        if (index === updatedEntries.length - 1 && name !== "") {
+            updatedEntries.push({ path: "", name: "" });
         }
 
-        // Update the path at the specified index
-        folderEntries[index].name = name;
+        // Update the name at the specified index
+        // If the name is empty, use the basename
+        updatedEntries[index] = {
+            path: updatedEntries[index].path,
+            name: name === "" ? basenameish(updatedEntries[index].path) : name
+        };
 
         // Remove empty paths (except the last one)
-        if (name === "" && folderEntries[index].path === "" && index !== folderEntries.length - 1) {
-            folderEntries.splice(index, 1);
+        if (name === "" && updatedEntries[index].path === "" && index !== updatedEntries.length - 1) {
+            updatedEntries.splice(index, 1);
         }
+
+        setFolderEntries(updatedEntries);
     }
 
     // Handle path deletion
     async function onClickRemove(index: number) {
-        if (index === folderEntries.length - 1) return;
-        folderEntries.splice(index, 1);
+        const updatedEntries = [...folderEntries];
+
+        if (index === updatedEntries.length - 1) return;
+        updatedEntries.splice(index, 1);
 
         // Make sure we always have at least one path (empty or not)
-        if (folderEntries.length === 0) {
-            folderEntries.push({ path: "", name: "" });
+        if (updatedEntries.length === 0) {
+            updatedEntries.push({ path: "", name: "" });
         }
+
+        setFolderEntries(updatedEntries);
     }
 
     // Ensure there's always at least one path when created (empty or not)
     if (folderEntries.length === 0) {
-        folderEntries.push({ path: "", name: "" });
+        setFolderEntries([{ path: "", name: "" }]);
     }
 
     return (
@@ -134,7 +165,7 @@ function FolderEntries({ folderEntries }: FolderEntriesProps) {
             <Forms.FormTitle tag="h4">Folder Paths</Forms.FormTitle>
             <Flex flexDirection="column" style={{ gap: "0.5em" }}>
                 {folderEntries.map((entry, index) => (
-                    <React.Fragment key={`path-${index}-${entry}`}>
+                    <React.Fragment key={`${index}-${entry.path}-${entry.name}`}>
                         <Flex flexDirection="row" style={{ gap: "0.5em" }}>
                             <Input
                                 placeholder="Folder path"
@@ -175,15 +206,22 @@ export const settings = definePluginSettings({
     folderPathsComponent: {
         type: OptionType.COMPONENT,
         description: "Folder paths to save images to",
-        component: () => {
-            const { folderEntries } = settings.use(["folderEntries"]);
+        component: ({ setValue, setError, option }) => {
+            // Weird stuff to get state in the folder entries component
+            const clonedFolderEntries = cachedFolderEntries.map(entry => {
+                return { path: entry.path, name: entry.name };
+            });
+            const [saveValues, setSaveValues] = useState(clonedFolderEntries);
 
-            return <FolderEntries folderEntries={folderEntries} />;
+            useEffect(() => {
+                cachedFolderEntries = saveValues.map(entry => {
+                    return { path: entry.path, name: entry.name };
+                });
+                DataStore.set("saveToFolderEntries", cachedFolderEntries);
+            }, [saveValues]);
+
+            return <FolderEntries folderEntries={saveValues} setFolderEntries={setSaveValues} />;
         }
-    },
-    folderEntries: {
-        default: [{ path: "", name: "" }] as FolderEntry[],
-        type: OptionType.CUSTOM,
     },
 });
 
@@ -199,4 +237,7 @@ export default definePlugin({
         "message": messageContextMenuPatch
     },
     settings,
+    async start() {
+        cachedFolderEntries = await DataStore.get("saveToFolderEntries") ?? [{ path: "", name: "" }];
+    }
 });
