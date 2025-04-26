@@ -86,18 +86,19 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: {
     let filename = basenameish(source ? new URL(source).pathname : "");
 
     if (props.favoriteableType === "emoji" && props.itemSrc && props.favoriteableId) {
+        const emoji = EmojiStore.getCustomEmojiById(props.favoriteableId);
+        console.log(emoji);
+        // Use to get highest quality avail
+        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + `?size=4096&lossless=true${emoji?.animated ? "&animated=true" : ""}`;
+        filename = getFilename(source, emoji?.name || props.favoriteableId);
+        type = "Emoji";
+    }
+
+    if (props.favoriteableType === "sticker" && props.itemSrc && props.favoriteableId) {
         const sticker = StickerStore.getStickerById(props.favoriteableId);
         // Use to get highest quality avail
         source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + "?size=4096&lossless=true";
         filename = getFilename(source, sticker?.name || props.favoriteableId);
-        type = "Emote";
-    }
-
-    if (props.favoriteableType === "sticker" && props.itemSrc && props.favoriteableId) {
-        const emote = EmojiStore.getCustomEmojiById(props.favoriteableId);
-        // Use to get highest quality avail
-        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + "?size=4096&lossless=true";
-        filename = getFilename(source, emote?.name || props.favoriteableId);
         type = "Sticker";
     }
 
