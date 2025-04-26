@@ -11,7 +11,7 @@ import { Flex } from "@components/Flex";
 import { Grid } from "@components/Grid";
 import { DeleteIcon } from "@components/Icons";
 import { openPluginModal } from "@components/PluginSettings/PluginModal";
-import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModal } from "@utils/modal";
+import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModalLazy } from "@utils/modal";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
 import { Button, EmojiStore, Forms, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
@@ -25,10 +25,17 @@ interface FolderEntry {
     name: string;
 }
 
+interface FileInfo {
+    url: string;
+    filename: string;
+}
+
 let cachedFolderEntries = [{ path: "", name: "" }];
 
 // Like https://stackoverflow.com/a/59907288
 function basenameish(path: string) {
+    if (path === "") return "";
+
     let end = path.length - 1;
     while (path[end] === "/" || path[end] === "\\") end -= 1;
 
@@ -36,7 +43,7 @@ function basenameish(path: string) {
     return path.slice(start + 1, end + 1);
 }
 
-function saveHandler(srcUrl: string, path: string, name?: string) {
+function saveHandler(srcUrl: string, path: string, name: string) {
     try {
         Native.saveToFolder(srcUrl, path, name);
     } catch (e: any) {
@@ -48,43 +55,71 @@ function saveHandler(srcUrl: string, path: string, name?: string) {
     }
 }
 
-// Add the Save to... option to whatever context menus could have images
+/**
+ * Construct a filename by extracting the file extension from the URL
+ * @param srcUrl The source URL of the file
+ * @param name The name of the file
+ * @returns The filename with extension
+ */
+function getFilename(srcUrl: string, name: string) {
+    const extension = basenameish(new URL(srcUrl).pathname).split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
+    return `${name}.${extension}`;
+}
+
+// Add the save to option to whatever context menus could have images
 const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { src: string; }) => {
-    console.log(props);
+    // console.log(props);
     if (!props?.src) return;
 
+    const filename = basenameish(new URL(props.src).pathname);
+
+    const getFileInfo = () => Promise.resolve({ url: props.src, filename });
+
     const group = findGroupChildrenByChildId("save-image", children) ?? children;
-    group.push(saveToMenu(props.src, ""));
+    group.push(SaveToMenu("", getFileInfo));
 };
 
 const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { favoriteableId: string | null; favoriteableType: string | null; itemSrc: string | null; itemSafeSrc: string | null; }) => {
     // itemSafeSrc is good for normal images/files
     let source: string | null = props.itemSafeSrc;
     let type = "";
-    if (props.favoriteableType === "emoji" && props.itemSrc) {
-        source = props.itemSrc.slice(0, props.itemSrc?.indexOf("?size="));
+    let filename = basenameish(source ? new URL(source).pathname : "");
+
+    if (props.favoriteableType === "emoji" && props.itemSrc && props.favoriteableId) {
+        const sticker = StickerStore.getStickerById(props.favoriteableId);
+        // Use to get highest quality avail
+        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + "?size=4096&lossless=true";
+        filename = getFilename(source, sticker?.name || props.favoriteableId);
         type = "Emote";
     }
-    if (props.favoriteableType === "sticker" && props.itemSrc) {
-        source = props.itemSrc.slice(0, props.itemSrc?.indexOf("?size="));
+
+    if (props.favoriteableType === "sticker" && props.itemSrc && props.favoriteableId) {
+        const emote = EmojiStore.getCustomEmojiById(props.favoriteableId);
+        // Use to get highest quality avail
+        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + "?size=4096&lossless=true";
+        filename = getFilename(source, emote?.name || props.favoriteableId);
         type = "Sticker";
     }
 
     if (!source) return;
 
+    const getFileInfo = () => Promise.resolve({ url: source, filename });
+
+    // Put option in save image group
     let group = findGroupChildrenByChildId("save-image", children);
     if (group) {
-        group.push(saveToMenu(source, type, props.favoriteableId));
+        group.push(SaveToMenu(type, getFileInfo));
         return;
     }
+    // If that isn't available, put it above open link group or copy message id group
     group = findGroupChildrenByChildId("open-native-link", children) || findGroupChildrenByChildId("devmode-copy-id", children, true);
     if (group) {
         group.unshift(<Menu.MenuSeparator key="save-to-separator" />);
-        group.unshift(saveToMenu(source, type, props.favoriteableId));
+        group.unshift(SaveToMenu(type, getFileInfo));
         return;
     }
 
-    children.push(saveToMenu(source, type, props.favoriteableId));
+    children.push(SaveToMenu(type, getFileInfo));
 };
 
 const userContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
@@ -111,26 +146,12 @@ function Input({ initialValue, onChange, placeholder }: {
 }
 
 
-
-function saveToMenu(srcUrl: string, type: string, objectId?: string | null) {
-    // Put the extension on sticker/emote names
-    const extension = basenameish(new URL(srcUrl).pathname).split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
-    let name: string | undefined;
-    if (type === "Sticker" && objectId) {
-        const sticker = StickerStore.getStickerById(objectId);
-        name = sticker?.name;
-    }
-    if (type === "Emote") {
-        const emote = EmojiStore.getCustomEmojiById(objectId);
-        name = emote?.name;
-    }
-    if (name) {
-        name = name.replace(" ", "_");
-    }
-
-    function onSave(path: string) {
-        saveHandler(srcUrl, path, name ? name + "." + extension : undefined);
-    }
+// Uses callback to get file info and save image
+function SaveToMenu(type: string, getFileInfo: () => Promise<FileInfo>) {
+    const handleSave = async (path: string) => {
+        const fileInfo = await getFileInfo();
+        saveHandler(fileInfo.url, path, fileInfo.filename);
+    };
 
     return (
         <Menu.MenuItem
@@ -147,14 +168,34 @@ function saveToMenu(srcUrl: string, type: string, objectId?: string | null) {
                         id={`save-to-folder-${index}`}
                         key={`save-to-folder-${index}`}
                         label={entry.name}
-                        action={() => onSave(entry.path)}
+                        action={() => handleSave(entry.path)}
                     >
-                        <Menu.MenuItem id={`save-${index}`} key={`save-${index}`} label="Save" action={() => onSave(entry.path)} />
-                        <Menu.MenuItem id={`save-as-${index}`} key={`save-as-${index}`} label="Save As..." action={() => {
-                            openModal(props => (
-                                <SaveAsModal modalProps={props} srcUrl={srcUrl} path={entry.path} defaultName={name} />
-                            ));
-                        }} />
+                        <Menu.MenuItem
+                            id={`save-${index}`}
+                            key={`save-${index}`}
+                            label="Save"
+                            action={() => handleSave(entry.path)}
+                        />
+                        <Menu.MenuItem
+                            id={`save-as-${index}`}
+                            key={`save-as-${index}`}
+                            label="Save As..."
+                            action={() => {
+                                openModalLazy(async () => {
+                                    // Only need to get it once
+                                    const fileInfo = await getFileInfo();
+
+                                    return props => (
+                                        <SaveAsModal
+                                            modalProps={props}
+                                            path={entry.path}
+                                            defaultFilename={fileInfo.filename}
+                                            onSave={(path: string, filename: string) => saveHandler(fileInfo.url, path, filename)}
+                                        />
+                                    );
+                                });
+                            }}
+                        />
                     </Menu.MenuItem>
                     : null
             ))}
@@ -164,16 +205,14 @@ function saveToMenu(srcUrl: string, type: string, objectId?: string | null) {
 
 // Save as modal component
 
-function SaveAsModal({ modalProps, srcUrl, path, defaultName }: { modalProps: ModalProps, srcUrl: string, path: string; defaultName: string | undefined; }) {
-    const fullname = basenameish(new URL(srcUrl).pathname);
-    const filename = defaultName || fullname.slice(0, fullname.lastIndexOf("."));
-    // Sometimes images (X embeds) have weird things after the extension
-    const extension = fullname.split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
+function SaveAsModal({ modalProps, path, defaultFilename, onSave }: { modalProps: ModalProps, path: string; defaultFilename: string; onSave: (path: string, filename: string) => void; }) {
+    const extension = defaultFilename.split(".").pop()?.match(/^[a-zA-Z0-9]+/)?.[0];
+    const defaultName = defaultFilename.split(".").slice(0, -1).join(".");
 
     const [name, setName] = useState("");
 
-    function onSave() {
-        saveHandler(srcUrl, path, name ? name + "." + extension : fullname);
+    function onSaveAndClose() {
+        onSave(path, name ? `${name}.${extension}` : `${defaultName}.${extension}`);
         modalProps.onClose();
     }
 
@@ -185,16 +224,16 @@ function SaveAsModal({ modalProps, srcUrl, path, defaultName }: { modalProps: Mo
             <ModalContent style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
                 <Forms.FormTitle tag="h5">Filename (leave empty for default)</Forms.FormTitle>
                 <Grid columns={2} gap="0.5em" style={{ gridTemplateColumns: "1fr auto", alignItems: "baseline" }}>
-                    <TextInput placeholder={filename} value={name} onChange={setName} onKeyDown={e => {
+                    <TextInput placeholder={defaultName} value={name} onChange={setName} onKeyDown={e => {
                         if (e.key === "Enter") {
-                            onSave();
+                            onSaveAndClose();
                         }
                     }} />
                     <Forms.FormTitle tag="h5" style={{ textTransform: "lowercase" }}>{"." + extension}</Forms.FormTitle>
                 </Grid>
             </ModalContent>
             <ModalFooter>
-                <Button color={Button.Colors.BRAND} onClick={onSave}>Save</Button>
+                <Button color={Button.Colors.BRAND} onClick={onSaveAndClose}>Save</Button>
                 <Button color={Button.Colors.TRANSPARENT} look={Button.Looks.LINK} onClick={() => modalProps.onClose()}>Cancel</Button>
             </ModalFooter>
         </ModalRoot>

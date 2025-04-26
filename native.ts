@@ -22,7 +22,7 @@ function randomChars(length: number) {
     return result;
 }
 
-export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, folderPath: string, filename?: string) {
+export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, folderPath: string, filename: string) {
     const response = await fetch(srcUrl);
 
     if (!response.ok) {
@@ -41,6 +41,11 @@ export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, f
     // Make sure filename won't break anything
     filename = filename.trim().replace(/[\\/:*?"<>|]/g, "");
     if (filename === "" || filename === "." || filename === "..") {
+        throw new Error("Invalid filename", { cause: "filename" });
+    }
+
+    // Check if the filtering left just the extension
+    if (filename.indexOf(".") === 0 && filename.lastIndexOf(".") === 0) {
         throw new Error("Invalid filename", { cause: "filename" });
     }
 
