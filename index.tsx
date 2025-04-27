@@ -15,6 +15,7 @@ import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModa
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
 import { Button, EmojiStore, Forms, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
+import { Channel, User } from "discord-types/general";
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
 
@@ -29,6 +30,23 @@ interface FileInfo {
     url: string;
     filename: string;
 }
+
+interface ImageContextMenuProps {
+    src: string;
+}
+
+interface MessageContextMenuProps {
+    favoriteableId: string | null;
+    favoriteableType: string | null;
+    itemSrc: string | null;
+    itemSafeSrc: string | null;
+}
+
+interface UserContextMenuProps {
+    channel: Channel;
+    user: User;
+}
+
 
 let cachedFolderEntries = [{ path: "", name: "" }];
 
@@ -67,7 +85,7 @@ function getFilename(srcUrl: string, name: string) {
 }
 
 // Add the save to option to whatever context menus could have images
-const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { src: string; }) => {
+const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props: ImageContextMenuProps) => {
     // console.log(props);
     if (!props?.src) return;
 
@@ -79,7 +97,7 @@ const imageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { s
     group.push(SaveToMenu("", getFileInfo));
 };
 
-const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: { favoriteableId: string | null; favoriteableType: string | null; itemSrc: string | null; itemSafeSrc: string | null; }) => {
+const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: MessageContextMenuProps) => {
     // itemSafeSrc is good for normal images/files
     let source: string | null = props.itemSafeSrc;
     let type = "";
@@ -123,8 +141,21 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: {
     children.push(SaveToMenu(type, getFileInfo));
 };
 
-const userContextMenuPatch: NavContextMenuPatchCallback = (children, props) => {
+const userContextMenuPatch: NavContextMenuPatchCallback = (children, props: UserContextMenuProps) => {
     console.log(props);
+
+    if (!props.user) return;
+
+    const avatarUrl = props.user.getAvatarURL("", 4096, true);
+    const serverAvatarUrl = props.user.getAvatarURL(props.channel.guild_id, 4096, true);
+    const getAvatarInfo = () => Promise.resolve({ url: avatarUrl, filename: getFilename(avatarUrl, props.user.username) });
+    const getServerAvatarInfo = () => Promise.resolve({ url: serverAvatarUrl, filename: getFilename(serverAvatarUrl, props.user.username) });
+
+    const group = findGroupChildrenByChildId("view-avatar", children) ?? children;
+    group.push(<>
+        {SaveToMenu("Avatar", getAvatarInfo)}
+        {props.user.hasAvatarForGuild(props.channel.guild_id) && SaveToMenu("Server Avatar", getServerAvatarInfo)}
+    </>);
 };
 
 // Buncha components
@@ -156,8 +187,8 @@ function SaveToMenu(type: string, getFileInfo: () => Promise<FileInfo>) {
 
     return (
         <Menu.MenuItem
-            id="save-to"
-            key="save-to"
+            id={`save-${type.replace(" ", "-")}-to`}
+            key={`save-${type.replace(" ", "-")}-to`}
             label={type ? `Save ${type} To...` : "Save To..."}
         >
             {cachedFolderEntries.length === 1 && <Menu.MenuItem id="saveto-add-folder" key="saveto-add-folder" label="Add A Folder First!" action={() => {
