@@ -14,8 +14,8 @@ import { openPluginModal } from "@components/PluginSettings/PluginModal";
 import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModalLazy } from "@utils/modal";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
-import { Button, EmojiStore, Forms, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
-import { Channel, User } from "discord-types/general";
+import { Button, EmojiStore, Forms, IconUtils, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
+import { Channel, Guild, User } from "discord-types/general";
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
 
@@ -45,6 +45,10 @@ interface MessageContextMenuProps {
 interface UserContextMenuProps {
     channel: Channel;
     user: User;
+}
+
+interface GuildContextMenuProps {
+    guild?: Guild;
 }
 
 
@@ -103,11 +107,12 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: M
     let type = "";
     let filename = basenameish(source ? new URL(source).pathname : "");
 
+    // Could probably simplify this at some point
     if (props.favoriteableType === "emoji" && props.itemSrc && props.favoriteableId) {
         const emoji = EmojiStore.getCustomEmojiById(props.favoriteableId);
         console.log(emoji);
         // Use to get highest quality avail
-        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + `?size=4096&lossless=true${emoji?.animated ? "&animated=true" : ""}`;
+        source = props.itemSrc.slice(0, props.itemSrc.indexOf("?size=")) + "?size=4096&lossless=true&animated=true";
         filename = getFilename(source, emoji?.name || props.favoriteableId);
         type = "Emoji";
     }
@@ -130,32 +135,51 @@ const messageContextMenuPatch: NavContextMenuPatchCallback = (children, props: M
         group.push(SaveToMenu(type, getFileInfo));
         return;
     }
-    // If that isn't available, put it above open link group or copy message id group
-    group = findGroupChildrenByChildId("open-native-link", children) || findGroupChildrenByChildId("devmode-copy-id", children, true);
+    // If that isn't available, put it above open link group
+    group = findGroupChildrenByChildId("open-native-link", children);
     if (group) {
         group.unshift(<Menu.MenuSeparator key="save-to-separator" />);
         group.unshift(SaveToMenu(type, getFileInfo));
         return;
     }
 
-    children.push(SaveToMenu(type, getFileInfo));
+    children.splice(-1, 0, SaveToMenu(type, getFileInfo));
 };
 
-const userContextMenuPatch: NavContextMenuPatchCallback = (children, props: UserContextMenuProps) => {
-    console.log(props);
+const userContextMenuPatch: NavContextMenuPatchCallback = (children, { user, channel }: UserContextMenuProps) => {
+    // console.log(props);
 
-    if (!props.user) return;
+    if (!user) return;
 
-    const avatarUrl = props.user.getAvatarURL("", 4096, true);
-    const serverAvatarUrl = props.user.getAvatarURL(props.channel.guild_id, 4096, true);
-    const getAvatarInfo = () => Promise.resolve({ url: avatarUrl, filename: getFilename(avatarUrl, props.user.username) });
-    const getServerAvatarInfo = () => Promise.resolve({ url: serverAvatarUrl, filename: getFilename(serverAvatarUrl, props.user.username) });
+    const avatarUrl = user.getAvatarURL("", 4096, true);
+    const serverAvatarUrl = user.getAvatarURL(channel.guild_id, 4096, true);
+    const getAvatarInfo = () => Promise.resolve({ url: avatarUrl, filename: getFilename(avatarUrl, user.username) });
+    const getServerAvatarInfo = () => Promise.resolve({ url: serverAvatarUrl, filename: getFilename(serverAvatarUrl, user.username) });
 
-    const group = findGroupChildrenByChildId("view-avatar", children) ?? children;
-    group.push(<>
+    children.splice(-1, 0, <Menu.MenuGroup>
         {SaveToMenu("Avatar", getAvatarInfo)}
-        {props.user.hasAvatarForGuild(props.channel.guild_id) && SaveToMenu("Server Avatar", getServerAvatarInfo)}
-    </>);
+        {user.hasAvatarForGuild(channel.guild_id) && SaveToMenu("Server Avatar", getServerAvatarInfo)}
+    </Menu.MenuGroup>);
+};
+
+const guildContextMenuPatch: NavContextMenuPatchCallback = (children, { guild }: GuildContextMenuProps) => {
+    console.log(guild);
+    if (!guild || (!guild.icon && !guild.banner)) return;
+
+    const getIconInfo = () => Promise.resolve({
+        url: guild.getIconURL(4096, true),
+        filename: getFilename(guild.getIconURL(4096, true), guild.name || guild.icon || guild.id)
+    });
+
+    const getBannerInfo = () => Promise.resolve({
+        url: IconUtils.getGuildBannerURL(guild, true) ?? "",
+        filename: getFilename(IconUtils.getGuildBannerURL(guild, true) ?? "", guild.name || guild.banner || guild.id)
+    });
+
+    children.splice(-1, 0, <Menu.MenuGroup>
+        {guild.icon && SaveToMenu("Icon", getIconInfo)}
+        {guild.banner && SaveToMenu("Banner", getBannerInfo)}
+    </Menu.MenuGroup>);
 };
 
 // Buncha components
@@ -187,7 +211,7 @@ function SaveToMenu(type: string, getFileInfo: () => Promise<FileInfo>) {
 
     return (
         <Menu.MenuItem
-            id={`save-${type.replace(" ", "-")}-to`}
+            id={`save${type ? `-${type.replace(" ", "-")}` : ""}-to`}
             key={`save-${type.replace(" ", "-")}-to`}
             label={type ? `Save ${type} To...` : "Save To..."}
         >
@@ -425,7 +449,8 @@ export default definePlugin({
     contextMenus: {
         "image-context": imageContextMenuPatch,
         "message": messageContextMenuPatch,
-        "user-context": userContextMenuPatch
+        "user-context": userContextMenuPatch,
+        "guild-context": guildContextMenuPatch
     },
     settings,
     async start() {
