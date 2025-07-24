@@ -10,12 +10,12 @@ import { definePluginSettings } from "@api/Settings";
 import { Flex } from "@components/Flex";
 import { Grid } from "@components/Grid";
 import { DeleteIcon } from "@components/Icons";
-import { openPluginModal } from "@components/PluginSettings/PluginModal";
+import { openPluginModal } from "@components/settings/tabs";
 import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModalLazy } from "@utils/modal";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
 import { findStoreLazy } from "@webpack";
 import { Button, EmojiStore, Forms, IconUtils, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
-import { Channel, Guild, User } from "discord-types/general";
+import { Channel, Guild, User } from "@vencord/discord-types";
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
 
@@ -167,8 +167,16 @@ const guildContextMenuPatch: NavContextMenuPatchCallback = (children, { guild }:
     if (!guild || (!guild.icon && !guild.banner)) return;
 
     const getIconInfo = () => Promise.resolve({
-        url: guild.getIconURL(4096, true),
-        filename: getFilename(guild.getIconURL(4096, true), guild.name || guild.icon || guild.id)
+        url: IconUtils.getGuildIconURL({
+            id: guild.id,
+            size: 4096,
+            canAnimate: true
+        }) ?? "",
+        filename: getFilename(IconUtils.getGuildIconURL({
+            id: guild.id,
+            size: 4096,
+            canAnimate: true
+        }) ?? "", guild.name || guild.icon || guild.id)
     });
 
     const getBannerInfo = () => Promise.resolve({
@@ -420,7 +428,7 @@ export const settings = definePluginSettings({
     folderPathsComponent: {
         type: OptionType.COMPONENT,
         description: "Folder paths to save images to",
-        component: ({ setValue, setError, option }) => {
+        component: ({ }) => {
             // Weird stuff to get state in the folder entries component
             const clonedFolderEntries = cachedFolderEntries.map(entry => {
                 return { path: entry.path, name: entry.name };
