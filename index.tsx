@@ -7,15 +7,13 @@
 import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/ContextMenu";
 import { DataStore } from "@api/index";
 import { definePluginSettings } from "@api/Settings";
-import { Flex } from "@components/Flex";
-import { Grid } from "@components/Grid";
-import { DeleteIcon } from "@components/Icons";
+import { Button, DeleteIcon, Flex, Grid, Heading } from "@components/index";
 import { openPluginModal } from "@components/settings/tabs";
 import { ModalContent, ModalFooter, ModalHeader, ModalProps, ModalRoot, openModalLazy } from "@utils/modal";
 import definePlugin, { OptionType, PluginNative } from "@utils/types";
-import { findStoreLazy } from "@webpack";
-import { Button, EmojiStore, Forms, IconUtils, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
 import { Channel, Guild, User } from "@vencord/discord-types";
+import { findStoreLazy } from "@webpack";
+import { EmojiStore, IconUtils, Menu, React, TextInput, Toasts, useEffect, useState } from "@webpack/common";
 
 const Native = VencordNative.pluginHelpers.SaveTo as PluginNative<typeof import("./native")>;
 
@@ -65,9 +63,16 @@ function basenameish(path: string) {
     return path.slice(start + 1, end + 1);
 }
 
-function saveHandler(srcUrl: string, path: string, name: string) {
+async function saveHandler(srcUrl: string, path: string, name: string) {
     try {
-        Native.saveToFolder(srcUrl, path, name);
+        const savedName = await Native.saveToFolder(srcUrl, path, name);
+        if (settings.store.showSuccessToasts) {
+            Toasts.show({
+                message: `Saved as ${savedName}`,
+                type: Toasts.Type.SUCCESS,
+                id: Toasts.genId()
+            });
+        }
     } catch (e: any) {
         Toasts.show({
             message: "Failed to save: " + e.message,
@@ -283,22 +288,22 @@ function SaveAsModal({ modalProps, path, defaultFilename, onSave }: { modalProps
     return (
         <ModalRoot {...modalProps}>
             <ModalHeader>
-                <Forms.FormTitle tag="h4">Save As</Forms.FormTitle>
+                <Heading tag="h4">Save As</Heading>
             </ModalHeader>
             <ModalContent style={{ display: "flex", flexDirection: "column", justifyContent: "center" }}>
-                <Forms.FormTitle tag="h5">Filename (leave empty for default)</Forms.FormTitle>
+                <Heading tag="h5">Filename (leave empty for default)</Heading>
                 <Grid columns={2} gap="0.5em" style={{ gridTemplateColumns: "1fr auto", alignItems: "baseline" }}>
                     <TextInput placeholder={defaultName} value={name} onChange={setName} onKeyDown={e => {
                         if (e.key === "Enter") {
                             onSaveAndClose();
                         }
                     }} />
-                    <Forms.FormTitle tag="h5" style={{ textTransform: "lowercase" }}>{"." + extension}</Forms.FormTitle>
+                    <Heading tag="h5" style={{ textTransform: "lowercase" }}>{"." + extension}</Heading>
                 </Grid>
             </ModalContent>
             <ModalFooter>
-                <Button color={Button.Colors.BRAND} onClick={onSaveAndClose}>Save</Button>
-                <Button color={Button.Colors.TRANSPARENT} look={Button.Looks.LINK} onClick={() => modalProps.onClose()}>Cancel</Button>
+                <Button variant="primary" onClick={onSaveAndClose}>Save</Button>
+                <Button variant="secondary" onClick={() => modalProps.onClose()}>Cancel</Button>
             </ModalFooter>
         </ModalRoot>
     );
@@ -382,7 +387,7 @@ function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) 
 
     return (
         <>
-            <Forms.FormTitle tag="h4">Folder Paths</Forms.FormTitle>
+            <Heading tag="h4">Folder Paths</Heading>
             <Flex flexDirection="column" style={{ gap: "0.5em" }}>
                 {folderEntries.map((entry, index) => (
                     <React.Fragment key={`${index}-${entry.path}-${entry.name}`}>
@@ -398,7 +403,7 @@ function FolderEntries({ folderEntries, setFolderEntries }: FolderEntriesProps) 
                                 onChange={value => updateName(value, index)}
                             />
                             <Button
-                                size={Button.Sizes.MIN}
+                                size="min"
                                 onClick={() => onClickRemove(index)}
                                 style={{
                                     background: "none",
@@ -445,6 +450,11 @@ export const settings = definePluginSettings({
             return <FolderEntries folderEntries={saveValues} setFolderEntries={setSaveValues} />;
         }
     },
+    showSuccessToasts: {
+        type: OptionType.BOOLEAN,
+        description: "Show a toast when an image is saved successfully",
+        default: true
+    }
 });
 
 export default definePlugin({

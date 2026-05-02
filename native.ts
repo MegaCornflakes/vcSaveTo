@@ -60,6 +60,7 @@ export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, f
             const fd = await open(path, "wx");
             await writeFile(fd, buffer);
             saved = true;
+            return filenameActual;
         } catch (err: any) {
             if (err.code === "EEXIST") {
                 filenameActual = `${filename.split(".")[0]}-${randomChars(8)}.${filename.split(".")[1]}`;
@@ -69,4 +70,6 @@ export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, f
             throw err;
         }
     }
+    // son
+    return "ugh";
 }
