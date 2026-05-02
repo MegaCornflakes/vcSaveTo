@@ -302,8 +302,10 @@ function SaveAsModal({ modalProps, path, defaultFilename, onSave }: { modalProps
                 </Grid>
             </ModalContent>
             <ModalFooter>
-                <Button variant="primary" onClick={onSaveAndClose}>Save</Button>
-                <Button variant="secondary" onClick={() => modalProps.onClose()}>Cancel</Button>
+                <Flex gap="4px">
+                    <Button variant="secondary" onClick={() => modalProps.onClose()}>Cancel</Button>
+                    <Button variant="primary" onClick={onSaveAndClose}>Save</Button>
+                </Flex>
             </ModalFooter>
         </ModalRoot>
     );

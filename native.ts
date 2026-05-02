@@ -70,6 +70,4 @@ export async function saveToFolder(_event: IpcMainInvokeEvent, srcUrl: string, f
             throw err;
         }
     }
-    // son
-    return "ugh";
 }
